@@ -1,0 +1,126 @@
+; Programa: Práctica de Laboratorio 3
+
+; Propósito:  programa en el Simulador que tenga una tarea que en modo usuario pinte píxeles pseudoaleatoriamente en 
+; el display gráfico (bucle infinito). Utilizará dos llamadas al sistema a través de dos “wrappers”. Un wrapper 
+; devolverá un valor pseudoaleatorio y el otro dada una fila (1ª o 2ª), una columna (de 1 a 16) y un color (de 0 a 15),
+; pintará el píxel correspondiente en el display textual (el origen de coordenadas será el extremo superior izquierdo).
+; El programa inicial deberá proteger de escrituras del usuario la zona de memoria del display gráfico (únicamente 
+; realizará esa protección). Además iniciará el timer para que cuente de 15 a 0, ya que la llamada al sistema
+; encargada de generar números pseudoaleatorios utilizará el valor que tenga en ese momento el contador del timer 
+; (TMRCOUNTER) como dicho número pseudoaleatorio. El programa NO utilizará interrupciones.
+; En caso de excepción se mostrará en el display textual “Error x. Sistema parado.”, siendo x el
+; número de excepción generada (una sola cifra) y se hará un HLT.
+
+; Autores: Jorge Afonso Blandez, Diego Navarro López, Clara Monsalve Paniagua y Sergio Picazo Serrano
+
+;Fecha: 25/10/2020
+
+	JMP boot 
+    JMP svc
+    JMP svc
+    JMP exc
+
+boot:
+    MOV SP, 0xFF    	; Set Supervisor SP
+
+	MOV A, 0x15			; Movemos al registro A el valor que queremos utilizar para el timer
+    OUT 3				; Cargamos el temporizador -> metemos en el registro 3 (TMRPRELOAD) el valor de A para que comience a funcionar el timer
+	MOVB BH, 0x30		; Movemos a la parte alta de B la coordenada Y del display 
+    MOVB BL, 0x00		; Movemos a la parte baja de B la coordenada X del display 
+    
+    MOV A, 0x03FF   	; Final de zona protegida
+    OUT 8           	; Introducimos la dirección final de la zona protegida en el registro MEMPTEND
+    MOV A, 0x030B   	; Inicio de zona protegida ***B para proteger blabblabla
+    OUT 7           	; Introducimos la dirección de inicio de la zona protegida en el registro MEMPTSTART
+    
+    PUSH 0x0000     	; User Task SR: IRQMASK = 0
+    PUSH 0x1FF      	; User Task SP = 0x1FF
+    PUSH tarea_usuario  ; IP de la tarea del usuario = tarea_usuario
+    SRET            	; Salta a modo usuario
+    HLT             				
+   
+svc:                	; Supervisor call
+    CMP A, 0			; Si A es 0, entonces empieza la subrutina de revisar el número aleatorio
+    JNZ .pintar    	 	; Si no es 0, entonces salta a la subrutina de pintar 
+
+;************************************* OBTENER NÚMERO ALEATORIO (PRIMER WRAPPER) ************************************
+    PUSH A				; Salvaguardamos el registro A que vamos a modificar
+    IN 4				; Obtenemos el valor del timer que utilizaremos como número aleatorio para el color del pixel y la siguiente posición donde pintaremos dicho pixel
+    MOVB CL, AL			; Movemos al registro CL el color aleatorio de pixel que queremos pintar
+    ADD B, A			; Sumamos el número aleatorio a la posición de B para obtener una nueva posición aleatoria
+    POP A				; Recuperamos el registro A que habíamos modificado
+    
+.pintar:
+	CMP A, 1			; Si A es 1, se ejecutará la llamada al sistema de pintar el color aleatorio de pixel en la posición aleatoria que se haya obtenido
+    JNZ .return			; Si no es 1, salta a la subrutina .return para volver a la tarea del usuario
+
+;**************************** PINTAR COLOR ALEATORIO EN POSICIÓN ALEATORIA (SEGUNDO WRAPPER) ************************
+    CMP B, 0x400 		; Comparamos la posición obtenida con la última posición del display
+    JB .sigue			; Si la posición es menor que la última posición del display entonces salta a sigue para imprimir el pixel
+    MOV B, 0x300		; Si es mayor o igual, entonces volvemos a la posición inicial del display   
+	JMP .return			; Si no, entonces continúa para imprimir el pixel en la posición correspondiente
+.sigue:
+    MOVB [B], CL		; Movemos al display el número aleatorio obtenido, que será el color de pixel a imprimir
+    
+.return:
+    SRET            	; Volvemos al modo usuario
+    ORG 0x100    		; Las instrucciones se ensamblarán a partir de la dirección 0x100
+
+;*************************************************** EXCEPCIONES ****************************************************
+exc_msg: 				; Definimos el primer mensaje a imprimir para cuando ocurra una excepción
+	DB "Error"
+    DB 0
+exc_msg2:				; Definimos el segundo mensaje a imprimir
+	DB ". Sistema parado."
+    DB 0
+
+;SUBRUTINA DE TRATAMIENTO DE EXCEPCIONES
+exc:
+	MOV B, 0			; Movemos a B -> 0, ya que lo utilizaremos como "String terminator"
+	MOV C, exc_msg		; Movemos a C el primer mensaje a imprimir
+    MOV D, 0x02E0
+.print:
+	MOVB AL, [C]		; Introducimos en el registro AL el caracter que se encuentra en la posición a la que apunta C
+	MOVB [D], AL		; Escribimos el caracter introduciendo en la posición a la que apunta D (display textual), lo que tenemos en AL (caracter)
+	INCB CL				; Se incrementa el caracter del mensaje que estamos leyendo, para leer el siguiente
+	INCB DL				; Se incrementa la posición del display textual
+	CMPB BL, [C]		; Comprueba si ha llegado al 0 (string terminator) para dejar de imprimir
+	JNZ .print			; Si no ha llegado, salta de vuelta a .print para seguir imprimiendo 
+	
+    INCB DL				; Incrementamos la posición del display para dejar un espacio	
+    MOV C, [0x00F6]		; Movemos al registro C lo que haya en la posición 00F6 -> el número de excepción se encontrará en esa posición de la pila de supervisor 
+    ADD C, 0x30			; Sumamos 0x30 a dicho número para obtener el número decimal real
+    MOVB [D], CL		; Imprimimos el caracter introduciendo en la posición a la que apunta D (display textual), lo que tenemos en CL (número obtenido)
+    INCB DL				; Incrementamos la posición del display para dejar un espacio
+    
+    MOV C, exc_msg2		; Movemos a C el segundo mensaje a imprimir
+.print2:
+	MOVB AL, [C]		; Introducimos en el registro AL el caracter que se encuentra en la posición a la que apunta C
+	MOVB [D], AL		; Escribimos el caracter introduciendo en la posición a la que apunta D (display textual), lo que tenemos en AL (caracter)
+	INCB CL				; Se incrementa el caracter del mensaje que estamos leyendo, para leer el siguiente
+	INCB DL				; Se incrementa la posición del display textual
+	CMPB BL, [C]		; Comprueba si ha llegado al 0 (string terminator) para dejar de imprimir
+	JNZ .print2			; Si no ha llegado, salta de vuelta a .print2 para seguir imprimiendo 
+    
+	HLT					; Cuando ha impreso todos los caracteres se produce el halt
+
+	ORG 0x200			; Las instrucciones se ensamblarán a partir de la dirección 0x200
+
+;*********************************************** TAREA DEL USUARIO **************************************************
+tarea_usuario:					
+	CALL definir_pixel	; Llama a la subrutina definir_pixel (obtiene color de pixel y posición aleatorios)
+    CALL colorear		; Llama a la subrutina colorear
+    JMP tarea_usuario	; Vuelve a llamar a definir_pixel (bucle infinito)
+
+; DEFINICIÓN DEL PRIMER WRAPPER
+definir_pixel:
+	;MOV [0x450], B		; Ejemplo para comprobar que funcionan las excepciones (ya que las excepciones solo pueden tratarse si se producen en modo usuario).
+	MOV A, 0    		; Valor de la PRIMERA llamada al sistema (WRAPPER 0)
+    SVC           		; Llamada al sistema #0. A -> número de llamada al sistema
+    RET 				; Cuando finaliza la llamada al sistema vuelve a tarea_usuario para ejecutar la siguiente instrucción
+
+; DEFINICIÓN DEL SEGUNDO WRAPPER
+colorear: 
+    MOV A, 1    		; Valor de la SEGUNDA llamada al sistema (WRAPPER 1)
+    SVC            		; Llamada al sistema #1. A -> número de llamada al sistema
+    RET					; Cuando finaliza la llamada al sistema vuelve a tarea_usuario para ejecutar la siguiente instrucción

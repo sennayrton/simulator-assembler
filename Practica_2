@@ -1,0 +1,141 @@
+; Programa: Práctica de Laboratorio 2
+
+;Propósito: programa en el cual hemos creado diferentes instrucciones que se llevarán a cabo dependiendo de la entrada que se haga por el teclado y del timer. 
+;Al pulsar el usuario una tecla del keypad comprendida entre 1 y 9, se mostrarán en la pantalla del simulador tantos píxeles como el número introducido indique, comenzando por la izquierda. Una vez impresos esos píxeles, el Simulador esperará a que se introduzca otro número por teclado de tal forma que se pueda volver a ejecutar el proceso que acabamos de explicar. Una vez introducido este número, el Simulador actuará de la misma manera continuando por la posición donde acabó el número anterior. Una vez se llene la pantalla del display por completo, se continuará sobreescribiendo los píxeles anteriores desde la primera posición de la izquierda. 
+;En cuanto al color de los píxeles, éste irá variando de color negro a color verde y viceversa en función del valor del registro 4 (TMRCOUNTER). Una vez llegado el valor de este registro a 0, se producirá una interrupción que derivará en el cambio de color (si el color estaba en 0, negro, pasará a estar en 20, verde y viceversa).
+
+;Observaciones: Dentro del código, hemos tenido una complicación en cuanto a la interrupción del timer. Al introducir un número por teclado, el timer se carga (TMRPRELOAD) a 20, como bien nosotros queríamos. Sin embargo, en cuanto no introducimos nada por teclado y se produce la interrupción del timer, tanto este como el tanto el IRQMASK incrementan su valor en gran medida, de tal forma que no corren con los valores que a nosotros nos interesan. Si, por algún casual, se introdujese un valor por teclado durante la interrupción del timer, el Simulador no daría ninguna respuesta.
+
+; Autores: Jorge Afonso Blandez, Diego Navarro López, Clara Monsalve Paniagua y Sergio Picazo Serrano
+
+;Fecha: 11/10/2020
+
+JMP boot
+JMP isr
+
+color: DB 0		; Ascii de negro por defecto (cambiará de color si se produce la interrupción)
+
+boot: 
+	
+    MOV B, 0x300   		; Movemos a B la dirección donde queremos empezar a pintar
+
+inicio:
+
+	MOV SP, 0xFF 		; Cargamos la pila
+    
+    MOVB AL, 3			; Movemos a la parte baja del registro A el valor que queremos utilizar para la máscara de interrupciones
+    OUT 0				; Activamos la máscara de interrupciones, la cual ocupa el registro 0 (IRQMASK) -> activamos ambos teclado y timer porque metemos el valor 3
+
+    MOVB AL, 0x20		; Movemos a la parte baja del registro A el valor que queremos utilizar para el timer
+    OUT 3				; Cargamos el temp -> metemos en el registro 3 (TMRPRELOAD) el valor de A
+    
+    STI					; Habilitamos las interrupciones
+
+;bucle para esperar a que se introduzca un número por teclado
+.espera_tecleo:
+	IN 1				; Comprueba el IRQSTATUS para comprobar qué está activado (timer o teclado), este valor se almacena en el registro A
+    CMPB AL, 1			; Comparamos el IRQSTATUS con 1 para comprobar si es el teclado lo que está activado
+    JNZ .espera_tecleo	; Mientras no esté activado el teclado (no se ha introducido ningún número) vuelve a empezar el bucle
+
+	HLT
+    
+;llamada a la rutina de tratamiento de interrupciones
+isr: 
+
+	;Salvaguardamos los registros
+	PUSH A
+    PUSH B
+    PUSH C
+    PUSH D
+    
+    IN 1 				; Comprueba el IRQSTATUS para saber qué está activado (timer o teclado)
+    CMPB AL, 1			; Comprueba si lo que está activado es el teclado
+    JZ teclado			; Si es el teclado, salta a la subrutina correspondiente para tratar la interrupción
+    CMPB AL, 2			; Si no es el teclado, comprueba si lo que está activado es el timer
+    JZ timer			; Si es el timer, salta a la subrutina correspondiente para tratar la interrupción
+
+	IRET
+
+;********************************************** SUBRUTINA TECLADO *************************************************
+
+teclado:
+
+    IN 6				; Comprobamos el dato que se ha introducido por teclado, para ello miramos lo que hay en el registro 6 (KPDDATA)
+    MOVB CL, AL 		; Movemos a CL lo que haya en KPDDATA (que se almacena por defecto en AL), esto determinará el número de repeticiones
+    SUBB CL, 0x30		; Restamos 30 al número introducido por teclado (para convertir de Ascii a decimal), así obtenemos el nº real de repeticiones 
+
+    MOVB CH, 0 			; Inicializamos contador para el número de repeticiones
+    
+.loop:
+    
+	CMPB CH, CL			; Comparamos el contador con el número de repeticiones
+    JZ fuera_teclado	; Si ha llegado al número de repeticiones establecido, se termina de imprimir y sale de .loop para terminar la interrupción
+    
+	MOVB DL, [color]	; Movemos a la parte baja de D el Ascii del color correspondiente 
+    MOVB [B], DL		; Imprimimos el Ascii en el display. En la dirección a donde apunta B (posición del display) metemos el valor de lo que queremos pintar
+    
+    INC B				; Incrementamos la posición del display para pintar en la siguiente posición, o en la primera si se llega al final del display
+	
+    INCB CH				; Incrementamos el contador	
+	
+	CMP B, 0x400		; Se compara la posición en la que se está imprimiendo con la última posición del display
+    JNZ	.loop			; Si no ha llegado al final del display se sigue imprimiendo
+    
+    MOV B, 0x300 		; Volvemos al punto inicial para comenzar a imprimir desde la primera posición del display
+    JMP .loop			; Volvemos al pricipio del bucle para empezar de nuevo a pintar
+
+fuera_teclado:
+
+    ;Se atiende la interrupción (IRQEOI)
+    MOV A, 1			; Movemos el valor 1 (valor de teclado) al registro A para indicar que se ha atendido a la interrupción
+    OUT 2				; Guardamos ese valor en el registro 2 (IRQSTATUS)
+    
+    ;Recuperación de registros 
+    POP D
+    POP C
+    ;POP B				; *Si recuperamos este registro, perdemos la dirección de memoria donde estamos imprimiendo (dirección del display)
+    ;POP A				; *Si recuperamos este registro, no realiza el cambio de color
+    
+    MOVB AL, 0			; Movemos a la parte baja del registro A el valor que queremos utilizar para la máscara de interrupciones
+    OUT 0				; Activamos la máscara de interrupciones, la cual ocupa el registro 0 (IRQMASK) -> activamos ambos teclado y timer porque metemos el valor 3
+    
+    JMP inicio			; Volvemos a la rutina inicio (en vez de IRET, ya que queremos conservar el valor de B, que es la dirección donde queremos imprimir el siguiente punto de color)
+    
+    ;IRET 				; Volvemos de la interrupción a donde se haya quedado el programa ejecutando
+
+
+;********************************************** SUBRUTINA TIMER ****************************************************
+
+timer:
+    
+    MOVB DL, [color]	; Movemos a DL el color que se está imprimiendo ahora
+    CMPB DL, 0			; Comparamos ese Ascii con el de '0' (color negro) 
+    JZ cambio_verde		; Si estaba imprimiendo negro cambiamos el color a verde, si no entonces imprimimos el negro
+    JMP cambio_negro	; Salta a la instrucción para cambiar al color negro ya que se estaba imprimiendo verde
+    
+cambio_verde:
+
+    MOVB DL, 20			; Movemos al registro DL el Ascii del color verde
+    JMP fuera_timer		; Salta a la instrucción fuera_timer para no volver a cambiar de color en cambio_negro
+
+cambio_negro:
+
+    MOVB DL, 0			; Movemos al registro DL el Ascii del color verde
+	
+fuera_timer:
+
+	MOVB [color], DL	; Actualizamos el valor del Ascii para imprimir el color correspondiente
+    
+    ;Se atiende la interrupcion (IRQEOI)
+    MOV A, 2			; Movemos el valor 2 (valor de timer) al registro A para indicar que se ha atendido a la interrupción 
+    OUT 2				; Guardamos ese valor en el registro 2 (IRQSTATUS)
+    
+    ;Recuperación de registros 
+    POP D
+    POP C
+    ;POP B				; *Si recuperamos este registro, no se puede imprimir más de una vez
+    POP A				
+    
+    JMP inicio			; Volvemos a la rutina inicio (en vez de IRET, ya que queremos conservar el valor de B, que es la dirección donde queremos imprimir el siguiente punto de color)
+    
+    ;IRET				; Volvemos de la interrupción a donde se haya quedado el programa ejecutando
